@@ -1,0 +1,78 @@
+{
+  "name": "@hasna/snapshots",
+  "version": "0.1.0",
+  "description": "Runtime snapshot and restore layer for Hasna local open-source developer environments.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "snapshots": "dist/cli/index.js",
+    "snapshots-agent": "dist/agent/index.js",
+    "snapshots-mcp": "dist/mcp/index.js",
+    "snapshots-serve": "dist/server/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./storage": {
+      "types": "./dist/storage.d.ts",
+      "import": "./dist/storage.js"
+    },
+    "./policy": {
+      "types": "./dist/policy.d.ts",
+      "import": "./dist/policy.js"
+    },
+    "./restore": {
+      "types": "./dist/restore.d.ts",
+      "import": "./dist/restore.js"
+    },
+    "./capture": {
+      "types": "./dist/capture/index.d.ts",
+      "import": "./dist/capture/index.js"
+    },
+    "./service": {
+      "types": "./dist/service.d.ts",
+      "import": "./dist/service.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "bunx tsc -p tsconfig.json",
+    "typecheck": "bunx tsc --noEmit",
+    "test": "bun test",
+    "verify:release": "bun run typecheck && bun test && bun run build",
+    "prepublishOnly": "bun run verify:release",
+    "postinstall": "mkdir -p $HOME/.hasna/snapshots/{exports,logs,plans} 2>/dev/null || true"
+  },
+  "keywords": [
+    "snapshots",
+    "restore",
+    "developer-tools",
+    "mcp",
+    "cli",
+    "hasna"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/snapshots.git"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "author": "Andrei Hasna <andrei@hasna.com>",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "typescript": "^5.9.3"
+  }
+}
