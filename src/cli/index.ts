@@ -180,7 +180,7 @@ function printHelp(unknown?: string): void {
     ok: !unknown,
     error: unknown ? `Unknown command: ${unknown}` : undefined,
     usage: [
-      "snapshots capture [--name name] [--include machine,tmux,projects,processes,sessions,browser,desktop]",
+      "snapshots capture [--name name] [--include machine,tmux,projects,processes,sessions,browser,desktop,apps]",
       "snapshots list [--limit n]",
       "snapshots show <snapshot-id>",
       "snapshots resources [--limit n]",

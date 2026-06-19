@@ -87,6 +87,22 @@ export function runCommand(command: string, args: string[] = [], timeoutMs = 5_0
   };
 }
 
+export function tmuxCommand(args: string[] = []): string[] {
+  return ["tmux", ...tmuxArgs(args)];
+}
+
+export function tmuxArgs(args: string[] = []): string[] {
+  const socketPath = process.env.HASNA_SNAPSHOTS_TMUX_SOCKET_PATH;
+  if (socketPath) return ["-S", socketPath, ...args];
+  const socketName = process.env.HASNA_SNAPSHOTS_TMUX_SOCKET;
+  if (socketName) return ["-L", socketName, ...args];
+  return args;
+}
+
+export function runTmux(args: string[] = [], timeoutMs = 5_000): CommandResult {
+  return runCommand("tmux", tmuxArgs(args), timeoutMs);
+}
+
 export function runJsonCommand(command: string, args: string[] = [], timeoutMs = 5_000): JsonValue | undefined {
   const result = runCommand(command, args, timeoutMs);
   if (!result.ok) return undefined;

@@ -77,7 +77,7 @@ WantedBy=default.target
 }
 
 function launchdPlist(command: string, intervalSeconds: number): string {
-  const [program, ...args] = command.split(/\s+/);
+  const [program, ...args] = splitCommand(command);
   const array = [program, ...args].map((arg) => `    <string>${escapeXml(arg)}</string>`).join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -93,9 +93,55 @@ ${array}
   <integer>${intervalSeconds}</integer>
   <key>RunAtLoad</key>
   <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>Crashed</key>
+    <true/>
+  </dict>
 </dict>
 </plist>
 `;
+}
+
+function splitCommand(command: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let quote: "'" | "\"" | undefined;
+  let escaped = false;
+
+  for (const char of command) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if ((char === "'" || char === "\"") && !quote) {
+      quote = char;
+      continue;
+    }
+    if (quote === char) {
+      quote = undefined;
+      continue;
+    }
+    if (!quote && /\s/.test(char)) {
+      if (current) {
+        parts.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += char;
+  }
+
+  if (escaped) current += "\\";
+  if (quote) throw new Error(`Unclosed quote in service command: ${command}`);
+  if (current) parts.push(current);
+  if (!parts.length) throw new Error("Service command cannot be empty.");
+  return parts;
 }
 
 function escapeXml(value: string): string {

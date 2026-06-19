@@ -11,6 +11,7 @@ export type ResourceKind =
   | "tmux-window"
   | "tmux-pane"
   | "process"
+  | "app"
   | "service"
   | "session"
   | "browser-state"

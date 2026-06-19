@@ -43,8 +43,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "bunx tsc -p tsconfig.json",
-    "typecheck": "bunx tsc --noEmit",
+    "build": "bun x tsc -p tsconfig.json",
+    "typecheck": "bun x tsc --noEmit",
     "test": "bun test",
     "verify:release": "bun run typecheck && bun test && bun run build",
     "prepublishOnly": "bun run verify:release",

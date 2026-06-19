@@ -1,7 +1,7 @@
 import type { PolicyMode, RestorePolicy, StoredSnapshotResource } from "./types.js";
 import { nowIso } from "./util.js";
 
-const SAFE_DEFAULT_RESTORE_KINDS = new Set(["project", "tmux-session"]);
+const SAFE_DEFAULT_RESTORE_KINDS = new Set(["project", "tmux-session", "tmux-window", "tmux-pane"]);
 
 export function selectorCandidates(resource: StoredSnapshotResource): string[] {
   return [
@@ -23,6 +23,14 @@ export function resolvePolicy(resource: StoredSnapshotResource, policies: Restor
       selector: `kind:${resource.kind}`,
       mode: "restore",
       reason: "Built-in allowlist for guarded local project/tmux restore.",
+      updatedAt: nowIso()
+    };
+  }
+  if (resource.kind === "process" && resource.attributes.restartable === true) {
+    return {
+      selector: resource.id,
+      mode: "restore",
+      reason: "Process has explicit HASNA_SNAPSHOTS_RESTARTABLE marker.",
       updatedAt: nowIso()
     };
   }
