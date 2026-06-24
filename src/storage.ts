@@ -4,6 +4,7 @@ import type {
   CaptureDiagnostic,
   JsonObject,
   RestorePolicy,
+  RestorePlan,
   SnapshotRecord,
   SnapshotResource,
   SnapshotSaveOptions,
@@ -11,6 +12,7 @@ import type {
   StorageOptions
 } from "./types.js";
 import { defaultDbPath, ensureParentDir, nowIso, sha256, stableJson } from "./util.js";
+import { CONTRACT_VERSION } from "./contracts.js";
 
 type Row = Record<string, unknown>;
 
@@ -164,6 +166,11 @@ export class SnapshotStore {
     return (this.db.query("SELECT * FROM snapshots ORDER BY created_at DESC LIMIT ?").all(limit) as Row[]).map(snapshotFromRow);
   }
 
+  countSnapshots(): number {
+    const row = this.db.query("SELECT COUNT(*) AS count FROM snapshots").get() as Row | null;
+    return Number(row?.count ?? 0);
+  }
+
   getSnapshot(id: string): SnapshotRecord | undefined {
     const row = this.db.query("SELECT * FROM snapshots WHERE id = ?").get(id) as Row | null;
     return row ? snapshotFromRow(row) : undefined;
@@ -188,6 +195,11 @@ export class SnapshotStore {
       .map((row) => JSON.parse(String((row as Row).payload)) as StoredSnapshotResource);
   }
 
+  countResources(): number {
+    const row = this.db.query("SELECT COUNT(*) AS count FROM resources").get() as Row | null;
+    return Number(row?.count ?? 0);
+  }
+
   upsertPolicy(selector: string, mode: RestorePolicy["mode"], reason?: string): RestorePolicy {
     const updatedAt = nowIso();
     this.db
@@ -208,6 +220,21 @@ export class SnapshotStore {
     this.db
       .query("INSERT OR REPLACE INTO restore_plans (id, snapshot_id, created_at, payload) VALUES (?, ?, ?, ?)")
       .run(plan.id, plan.snapshotId, plan.createdAt, JSON.stringify(plan));
+  }
+
+  listRestorePlans(limit = 50): RestorePlan[] {
+    return (this.db.query("SELECT payload FROM restore_plans ORDER BY created_at DESC LIMIT ?").all(limit) as Row[])
+      .map((row) => restorePlanFromPayload(String(row.payload)));
+  }
+
+  countRestorePlans(): number {
+    const row = this.db.query("SELECT COUNT(*) AS count FROM restore_plans").get() as Row | null;
+    return Number(row?.count ?? 0);
+  }
+
+  getRestorePlan(id: string): RestorePlan | undefined {
+    const row = this.db.query("SELECT payload FROM restore_plans WHERE id = ?").get(id) as Row | null;
+    return row ? restorePlanFromPayload(String(row.payload)) : undefined;
   }
 }
 
@@ -261,6 +288,14 @@ function policyFromRow(row: Row): RestorePolicy {
     mode: row.mode as RestorePolicy["mode"],
     reason: row.reason == null ? undefined : String(row.reason),
     updatedAt: String(row.updated_at)
+  };
+}
+
+function restorePlanFromPayload(payload: string): RestorePlan {
+  const plan = JSON.parse(payload) as RestorePlan;
+  return {
+    ...plan,
+    contract_version: plan.contract_version ?? CONTRACT_VERSION
   };
 }
 

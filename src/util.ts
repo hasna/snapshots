@@ -111,6 +111,12 @@ export function runJsonCommand(command: string, args: string[] = [], timeoutMs =
 
 export function redactText(input: string): string {
   return input
+    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "[redacted-private-key]")
+    .replace(/\b(AKIA|ASIA)[A-Z0-9]{16}\b/g, "[redacted-aws-access-key]")
+    .replace(/\bsk-[A-Za-z0-9_-]{20,}\b/g, "[redacted-api-key]")
+    .replace(/\bsk-ant-[A-Za-z0-9_-]{20,}\b/g, "[redacted-api-key]")
+    .replace(/\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g, "[redacted-github-token]")
+    .replace(/\bxox[baprs]-[A-Za-z0-9-]{20,}\b/g, "[redacted-slack-token]")
     .replace(/([A-Za-z_]*(?:TOKEN|SECRET|KEY|PASSWORD|PASS|COOKIE)[A-Za-z_]*=)[^\s]+/gi, "$1[redacted]")
     .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, "$1[redacted]")
     .replace(/(https?:\/\/[^:\s/]+:)[^@\s/]+(@)/gi, "$1[redacted]$2");
@@ -144,6 +150,10 @@ export function shellQuote(value: string): string {
 export function slugPart(value: string): string {
   const slug = value.trim().toLowerCase().replace(/[^a-z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "");
   return slug || sha256(value).slice(0, 12);
+}
+
+export function stableIdPart(value: string): string {
+  return `${slugPart(value)}-${sha256(value).slice(0, 8)}`;
 }
 
 export function fileExists(path: string | undefined): path is string {

@@ -23,4 +23,14 @@ describe("service planning", () => {
     expect(plan.content).toContain("Restart=on-failure");
     expect(plan.content).toContain("ExecStart=snapshots-agent run --interval 60");
   });
+
+  test("default service command uses the requested interval", () => {
+    const plan = planService({ platform: "linux", intervalSeconds: 60 });
+
+    expect(plan.content).toContain("ExecStart=snapshots-agent run --interval 60");
+  });
+
+  test("systemd service commands reject unit injection characters", () => {
+    expect(() => planService({ platform: "linux", command: "snapshots-agent run\nExecStart=/bin/false" })).toThrow("unsafe control characters");
+  });
 });

@@ -14,6 +14,7 @@ export type ResourceKind =
   | "app"
   | "service"
   | "session"
+  | "agent-session"
   | "browser-state"
   | "desktop-window"
   | "diagnostic";
@@ -71,6 +72,13 @@ export type RestoreOperationStatus =
   | "applied"
   | "failed";
 
+export interface RestoreOperationSafety {
+  effect: "none" | "filesystem-write" | "tmux" | "process-spawn" | "app-open" | "agent-resume";
+  requires: string[];
+  command_hash?: string;
+  blocked_reason?: string;
+}
+
 export interface RestoreOperation {
   id: string;
   kind: string;
@@ -80,10 +88,12 @@ export interface RestoreOperation {
   status: RestoreOperationStatus;
   command?: string[];
   reason?: string;
+  safety: RestoreOperationSafety;
   resource?: StoredSnapshotResource;
 }
 
 export interface RestorePlan {
+  contract_version: number;
   id: string;
   snapshotId: string;
   createdAt: string;
@@ -104,9 +114,11 @@ export interface StorageOptions {
 }
 
 export interface CaptureOptions {
-  include?: string[];
+  include?: CaptureIncludeValue[];
   cwd?: string;
   now?: string;
+  includePaneTail?: boolean;
+  maxPaneTailChars?: number;
 }
 
 export interface SnapshotSaveOptions {
@@ -120,3 +132,4 @@ export interface RestoreExecutionOptions {
   apply?: boolean;
   yes?: boolean;
 }
+import type { CaptureIncludeValue } from "./validation.js";

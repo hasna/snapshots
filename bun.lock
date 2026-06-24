@@ -5,8 +5,8 @@
     "": {
       "name": "@hasna/snapshots",
       "devDependencies": {
-        "@types/bun": "^1.3.14",
-        "typescript": "^5.9.3",
+        "@types/bun": "1.3.14",
+        "typescript": "5.9.3",
       },
     },
   },

@@ -1,8 +1,11 @@
 #!/usr/bin/env bun
-import { captureSnapshot, getSnapshotEnvelope, listPolicies, listResources, listSnapshots, planSnapshotRestore, upsertPolicy } from "../runtime.js";
+import { captureSnapshot, countResources, countRestorePlans, countSnapshots, getRestorePlan, getResumeContext, getSnapshotEnvelope, listPolicies, listResources, listRestorePlans, listSnapshots, planSnapshotRestore, upsertPolicy } from "../runtime.js";
 import { normalizePolicyMode } from "../policy.js";
 import { applyServicePlan, planService } from "../service.js";
 import { defaultDbPath } from "../util.js";
+import { withContract } from "../contracts.js";
+import { parseDbPath, parseInclude, parseLimit, parsePositiveInteger, parseSnapshotId } from "../validation.js";
+import { renderCliOutput, type DisplayKind, type DisplayOptions } from "../display.js";
 
 interface ParsedArgs {
   positional: string[];
@@ -12,60 +15,100 @@ interface ParsedArgs {
 export async function main(argv = process.argv.slice(2)): Promise<void> {
   const parsed = parseArgs(argv);
   const [command = "help", ...rest] = parsed.positional;
-  const dbPath = stringFlag(parsed, "db") ?? defaultDbPath();
+  const dbPath = parseDbPath(parsed.flags.db) ?? defaultDbPath();
 
   try {
     switch (command) {
       case "capture": {
-        const include = stringFlag(parsed, "include")?.split(",").map((part) => part.trim()).filter(Boolean);
         const result = await captureSnapshot({
           dbPath,
           name: stringFlag(parsed, "name"),
-          include
+          include: parseInclude(parsed.flags.include),
+          includePaneTail: Boolean(parsed.flags["include-pane-tail"]),
+          maxPaneTailChars: parsed.flags["pane-tail-chars"] == null
+            ? undefined
+            : parsePositiveInteger(parsed.flags["pane-tail-chars"], "pane-tail-chars", { maxValue: 16_000 })
         });
-        print(result);
+        print("capture", result, parsed);
         return;
       }
       case "list":
       case "snapshots": {
-        print({ snapshots: listSnapshots({ dbPath, limit: numberFlag(parsed, "limit") ?? 50 }) });
+        const limit = limitFlag(parsed, 20, 50, 500);
+        const snapshots = listSnapshots({ dbPath, limit });
+        const value = parsed.flags.json
+          ? withContract({ snapshots })
+          : withContract({ snapshots, total: countSnapshots({ dbPath }), limit });
+        print("snapshots-list", value, parsed, { limit });
         return;
       }
       case "show": {
-        const id = required(rest[0], "snapshot id");
-        print(getSnapshotEnvelope({ dbPath, id }));
+        const id = parseSnapshotId(rest[0]);
+        print("snapshot-show", getSnapshotEnvelope({ dbPath, id }), parsed, { limit: displayLimit(parsed, 20, 1_000) });
         return;
       }
       case "resources": {
-        print(listResources({ dbPath, limit: numberFlag(parsed, "limit") ?? 200 }));
+        const limit = limitFlag(parsed, 50, 200, 1_000);
+        const resources = listResources({ dbPath, limit });
+        const value = parsed.flags.json
+          ? resources
+          : { ...resources, total: countResources({ dbPath }), limit };
+        print("resources-list", value, parsed, { limit });
+        return;
+      }
+      case "resume": {
+        print("resume", getResumeContext({
+          dbPath,
+          id: parseSnapshotId(rest[0] ?? "latest", "snapshot id", { allowLatest: true }),
+          maxPaneTailChars: parsed.flags["pane-tail-chars"] == null
+            ? undefined
+            : parsePositiveInteger(parsed.flags["pane-tail-chars"], "pane-tail-chars", { maxValue: 16_000 })
+        }), parsed, { limit: displayLimit(parsed, 12, 100) });
         return;
       }
       case "plan": {
-        const id = required(rest[0], "snapshot id");
-        print(planSnapshotRestore({ dbPath, id }));
+        const id = parseSnapshotId(rest[0]);
+        print("restore-plan", planSnapshotRestore({ dbPath, id }), parsed, { limit: displayLimit(parsed, 20, 1_000) });
         return;
       }
+      case "plans": {
+        const subcommand = rest[0] ?? "list";
+        if (subcommand === "list") {
+          const limit = limitFlag(parsed, 20, 50, 500);
+          const plans = listRestorePlans({ dbPath, limit });
+          const value = parsed.flags.json
+            ? plans
+            : { ...plans, total: countRestorePlans({ dbPath }), limit };
+          print("restore-plans-list", value, parsed, { limit });
+          return;
+        }
+        if (subcommand === "show") {
+          print("restore-plan", getRestorePlan({ dbPath, id: parseSnapshotId(rest[1], "restore plan id") }), parsed, { limit: displayLimit(parsed, 20, 1_000) });
+          return;
+        }
+        throw new Error(`Unknown plans command: ${subcommand}`);
+      }
       case "restore": {
-        const id = required(rest[0], "snapshot id");
-        print(planSnapshotRestore({
+        const id = parseSnapshotId(rest[0]);
+        print("restore-plan", planSnapshotRestore({
           dbPath,
           id,
           apply: Boolean(parsed.flags.apply),
           yes: Boolean(parsed.flags.yes)
-        }));
+        }), parsed, { limit: displayLimit(parsed, 20, 1_000) });
         return;
       }
       case "policy":
       case "policies": {
         const subcommand = rest[0] ?? "list";
         if (subcommand === "list") {
-          print({ policies: listPolicies({ dbPath }) });
+          print("policy-list", withContract({ policies: listPolicies({ dbPath }) }), parsed, { limit: displayLimit(parsed, 50, 1_000) });
           return;
         }
         if (subcommand === "set") {
           const selector = required(rest[1], "selector");
           const mode = normalizePolicyMode(required(rest[2], "mode"));
-          print({ policy: upsertPolicy({ dbPath, selector, mode, reason: stringFlag(parsed, "reason") }) });
+          print("policy-set", withContract({ policy: upsertPolicy({ dbPath, selector, mode, reason: stringFlag(parsed, "reason") }) }), parsed);
           return;
         }
         throw new Error(`Unknown policy command: ${subcommand}`);
@@ -73,11 +116,16 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       case "daemon": {
         const subcommand = rest[0] ?? "once";
         if (subcommand === "once") {
-          print(await captureSnapshot({ dbPath, name: stringFlag(parsed, "name") ?? "daemon-once" }));
+          print("capture", await captureSnapshot({ dbPath, name: stringFlag(parsed, "name") ?? "daemon-once" }), parsed);
           return;
         }
         if (subcommand === "run") {
-          await runDaemon(dbPath, numberFlag(parsed, "interval") ?? 300, numberFlag(parsed, "max-runs"));
+          await runDaemon(
+            dbPath,
+            parsePositiveInteger(parsed.flags.interval, "interval", { defaultValue: 300, maxValue: 86_400 }),
+            parsed.flags["max-runs"] == null ? undefined : parsePositiveInteger(parsed.flags["max-runs"], "max-runs", { maxValue: 1_000_000 }),
+            outputOptions(parsed)
+          );
           return;
         }
         throw new Error(`Unknown daemon command: ${subcommand}`);
@@ -86,45 +134,47 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
         const subcommand = rest[0] ?? "plan";
         const servicePlan = planService({
           command: stringFlag(parsed, "command"),
-          intervalSeconds: numberFlag(parsed, "interval")
+          intervalSeconds: parsed.flags.interval == null
+            ? undefined
+            : parsePositiveInteger(parsed.flags.interval, "interval", { maxValue: 86_400 })
         });
         if (subcommand === "plan") {
-          print({ service: servicePlan });
+          print("service", withContract({ service: servicePlan }), parsed);
           return;
         }
         if (subcommand === "install") {
-          print(applyServicePlan(servicePlan, Boolean(parsed.flags.apply) && Boolean(parsed.flags.yes)));
+          print("service", withContract(applyServicePlan(servicePlan, Boolean(parsed.flags.apply) && Boolean(parsed.flags.yes))), parsed);
           return;
         }
         throw new Error(`Unknown service command: ${subcommand}`);
       }
       case "doctor": {
-        print({
+        print("doctor", withContract({
           ok: true,
           db_path: dbPath,
-          commands: ["capture", "list", "show", "resources", "plan", "restore", "policy", "daemon", "service"]
-        });
+          commands: ["capture", "list", "show", "resources", "resume", "plan", "plans", "restore", "policy", "daemon", "service"]
+        }), parsed);
         return;
       }
       case "help":
       default:
-        printHelp(command === "help" ? undefined : command);
+        printHelp(parsed, command === "help" ? undefined : command);
         if (command !== "help") process.exitCode = 1;
     }
   } catch (error) {
     process.exitCode = 1;
-    print({
+    print("error", withContract({
       ok: false,
       error: error instanceof Error ? error.message : String(error)
-    });
+    }), parsed);
   }
 }
 
-async function runDaemon(dbPath: string, intervalSeconds: number, maxRuns?: number): Promise<void> {
+async function runDaemon(dbPath: string, intervalSeconds: number, maxRuns: number | undefined, options: DisplayOptions): Promise<void> {
   let runs = 0;
   while (!maxRuns || runs < maxRuns) {
     const result = await captureSnapshot({ dbPath, name: `daemon-${new Date().toISOString()}` });
-    print({ event: "snapshot", ...result });
+    console.log(renderCliOutput("capture", { event: "snapshot", ...result }, options));
     runs += 1;
     if (maxRuns && runs >= maxRuns) break;
     await new Promise((resolve) => setTimeout(resolve, Math.max(1, intervalSeconds) * 1_000));
@@ -158,41 +208,51 @@ function stringFlag(parsed: ParsedArgs, name: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function numberFlag(parsed: ParsedArgs, name: string): number | undefined {
-  const value = stringFlag(parsed, name);
-  if (!value) return undefined;
-  const parsedValue = Number(value);
-  if (!Number.isFinite(parsedValue)) throw new Error(`Invalid number for --${name}: ${value}`);
-  return parsedValue;
-}
-
 function required(value: string | undefined, label: string): string {
   if (!value) throw new Error(`Missing ${label}.`);
   return value;
 }
 
-function print(value: unknown): void {
-  console.log(JSON.stringify(value, null, 2));
+function print(kind: DisplayKind, value: unknown, parsed: ParsedArgs, options: DisplayOptions = {}): void {
+  console.log(renderCliOutput(kind, value, { ...outputOptions(parsed), ...options }));
 }
 
-function printHelp(unknown?: string): void {
-  print({
+function printHelp(parsed: ParsedArgs, unknown?: string): void {
+  print("help", withContract({
     ok: !unknown,
     error: unknown ? `Unknown command: ${unknown}` : undefined,
     usage: [
-      "snapshots capture [--name name] [--include machine,tmux,projects,processes,sessions,browser,desktop,apps]",
-      "snapshots list [--limit n]",
-      "snapshots show <snapshot-id>",
-      "snapshots resources [--limit n]",
-      "snapshots plan <snapshot-id>",
-      "snapshots restore <snapshot-id> [--apply --yes]",
-      "snapshots policy list",
-      "snapshots policy set <selector> <observe|restore|ignore> [--reason text]",
+      "snapshots capture [--name name] [--include machine,tmux,projects,processes,sessions,agent-sessions,browser,desktop,apps] [--include-pane-tail] [--json]",
+      "snapshots list [--limit n] [--verbose] [--json]",
+      "snapshots show <snapshot-id> [--limit n] [--verbose] [--json]",
+      "snapshots resources [--limit n] [--verbose] [--json]",
+      "snapshots resume [snapshot-id|latest] [--pane-tail-chars n] [--verbose] [--json]",
+      "snapshots plan <snapshot-id> [--limit n] [--verbose] [--json]",
+      "snapshots plans list [--limit n] [--json]",
+      "snapshots plans show <plan-id> [--limit n] [--verbose] [--json]",
+      "snapshots restore <snapshot-id> [--apply --yes] [--verbose] [--json]",
+      "snapshots policy list [--limit n] [--json]",
+      "snapshots policy set <selector> <observe|restore|ignore> [--reason text] [--json]",
       "snapshots daemon once|run [--interval seconds] [--max-runs n]",
-      "snapshots service plan|install [--apply --yes]",
-      "snapshots doctor"
+      "snapshots service plan|install [--apply --yes] [--verbose] [--json]",
+      "snapshots doctor [--json]"
     ]
-  });
+  }), parsed);
+}
+
+function outputOptions(parsed: ParsedArgs): DisplayOptions {
+  return {
+    json: Boolean(parsed.flags.json),
+    verbose: Boolean(parsed.flags.verbose)
+  };
+}
+
+function limitFlag(parsed: ParsedArgs, compactDefault: number, jsonDefault: number, maxValue: number): number {
+  return parseLimit(parsed.flags.limit, parsed.flags.json ? jsonDefault : compactDefault, maxValue);
+}
+
+function displayLimit(parsed: ParsedArgs, defaultValue: number, maxValue: number): number {
+  return parseLimit(parsed.flags.limit, defaultValue, maxValue);
 }
 
 if (import.meta.main) {
