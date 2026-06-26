@@ -26,14 +26,6 @@ export function resolvePolicy(resource: StoredSnapshotResource, policies: Restor
       updatedAt: nowIso()
     };
   }
-  if (resource.kind === "process" && resource.attributes.restartable === true) {
-    return {
-      selector: resource.id,
-      mode: "restore",
-      reason: "Process has explicit HASNA_SNAPSHOTS_RESTARTABLE marker.",
-      updatedAt: nowIso()
-    };
-  }
   return {
     selector: "*",
     mode: "observe",

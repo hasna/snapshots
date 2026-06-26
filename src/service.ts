@@ -20,13 +20,14 @@ export interface ServicePlan {
 
 export function planService(options: ServicePlanOptions = {}): ServicePlan {
   const targetPlatform = options.platform ?? platform();
-  const command = options.command ?? "snapshots-agent run --interval 300";
+  const intervalSeconds = options.intervalSeconds ?? 300;
+  const command = validateServiceCommand(options.command ?? `snapshots-agent run --interval ${intervalSeconds}`);
   if (targetPlatform === "darwin") {
     const path = join(homedir(), "Library", "LaunchAgents", "com.hasna.snapshots.plist");
     return {
       kind: "launchd",
       path,
-      content: launchdPlist(command, options.intervalSeconds ?? 300),
+      content: launchdPlist(command, intervalSeconds),
       applyCommand: ["launchctl", "load", path],
       note: "launchd plan is dry-run until service install --apply --yes is used."
     };
@@ -67,7 +68,7 @@ Description=Hasna snapshots agent
 
 [Service]
 Type=simple
-ExecStart=${command}
+ExecStart=${escapeSystemdExecStart(command)}
 Restart=on-failure
 RestartSec=10
 
@@ -104,6 +105,7 @@ ${array}
 }
 
 function splitCommand(command: string): string[] {
+  validateServiceCommand(command);
   const parts: string[] = [];
   let current = "";
   let quote: "'" | "\"" | undefined;
@@ -142,6 +144,16 @@ function splitCommand(command: string): string[] {
   if (current) parts.push(current);
   if (!parts.length) throw new Error("Service command cannot be empty.");
   return parts;
+}
+
+function validateServiceCommand(command: string): string {
+  if (!command.trim()) throw new Error("Service command cannot be empty.");
+  if (/[\0\r\n]/.test(command)) throw new Error("Service command contains unsafe control characters.");
+  return command;
+}
+
+function escapeSystemdExecStart(command: string): string {
+  return command.replaceAll("%", "%%");
 }
 
 function escapeXml(value: string): string {
