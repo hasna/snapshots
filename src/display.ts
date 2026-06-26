@@ -9,14 +9,19 @@ import type {
   SnapshotRecord,
   StoredSnapshotResource
 } from "./types.js";
+import { stableJson } from "./util.js";
 
 export type DisplayKind =
   | "capture"
   | "snapshots-list"
   | "snapshot-show"
   | "resources-list"
+  | "ops-state"
+  | "db-integrity"
+  | "retention"
   | "resume"
   | "restore-plan"
+  | "restore-smoke"
   | "restore-plans-list"
   | "policy-list"
   | "policy-set"
@@ -60,6 +65,11 @@ export function renderCliOutput(kind: DisplayKind, value: unknown, options: Disp
       return renderSnapshotShow(value, options);
     case "resources-list":
       return renderResourcesList(value, options);
+    case "ops-state":
+    case "db-integrity":
+    case "retention":
+    case "restore-smoke":
+      return renderStableJson(value);
     case "resume":
       return renderResume(value, options);
     case "restore-plan":
@@ -83,7 +93,7 @@ export function renderCliOutput(kind: DisplayKind, value: unknown, options: Disp
 
 export function formatMcpToolResult(kind: DisplayKind, value: unknown, options: DisplayOptions = {}): string {
   const output = options.json || options.verbose ? value : compactMcpResult(kind, value, options);
-  return JSON.stringify(output, null, 2);
+  return options.json || options.verbose ? JSON.stringify(output, null, 2) : renderStableJson(output);
 }
 
 export function compactMcpResult(kind: DisplayKind, value: unknown, options: DisplayOptions = {}): unknown {
@@ -94,6 +104,11 @@ export function compactMcpResult(kind: DisplayKind, value: unknown, options: Dis
       return compactSnapshotList(value, options);
     case "snapshot-show":
       return compactSnapshotShow(value, options);
+    case "ops-state":
+    case "db-integrity":
+    case "retention":
+    case "restore-smoke":
+      return value;
     case "resume":
       return compactResume(value);
     case "restore-plan":
@@ -424,6 +439,10 @@ function renderGeneric(value: unknown): string {
     truncateText(JSON.stringify(value, null, 2), 2_000),
     "Hint: add --json for the full output."
   ].join("\n");
+}
+
+function renderStableJson(value: unknown): string {
+  return stableJson(JSON.parse(JSON.stringify(value)) as JsonValue);
 }
 
 function compactCapture(value: unknown): unknown {

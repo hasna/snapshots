@@ -1,5 +1,19 @@
 #!/usr/bin/env bun
-import { captureSnapshot, countRestorePlans, countSnapshots, getRestorePlan, getResumeContext, getSnapshotEnvelope, listRestorePlans, listSnapshots, planSnapshotRestore } from "../runtime.js";
+import {
+  captureSnapshot,
+  checkDbIntegrity,
+  countRestorePlans,
+  countSnapshots,
+  getOpsState,
+  getRestorePlan,
+  getResumeContext,
+  getSnapshotEnvelope,
+  listRestorePlans,
+  listSnapshots,
+  planSnapshotRestore,
+  restoreSmoke,
+  runRetention
+} from "../runtime.js";
 import { CONTRACT_VERSION, PACKAGE_VERSION, withContract } from "../contracts.js";
 import { parseInclude, parseLimit, parsePositiveInteger, parseSnapshotId } from "../validation.js";
 import { formatMcpToolResult, type DisplayKind, type DisplayOptions } from "../display.js";
@@ -48,6 +62,49 @@ const tools = [
       properties: {
         id: { type: "string" },
         limit: { type: "number", description: "Maximum resources to include in compact output." },
+        verbose: { type: "boolean" },
+        format: { type: "string", enum: ["compact", "json"] }
+      }
+    }
+  },
+  {
+    name: "get_ops_state",
+    description: "Get a compact ops-state snapshot for snapshot storage health, pressure, latest refs, and integrity.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        includeIntegrity: { type: "boolean" },
+        verbose: { type: "boolean" },
+        format: { type: "string", enum: ["compact", "json"] }
+      }
+    }
+  },
+  {
+    name: "check_db_integrity",
+    description: "Run SQLite quick/full integrity checks and bounded foreign-key checks for snapshot storage.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        full: { type: "boolean" },
+        verbose: { type: "boolean" },
+        format: { type: "string", enum: ["compact", "json"] }
+      }
+    }
+  },
+  {
+    name: "run_retention",
+    description: "Plan or apply snapshot retention. Dry-run unless apply=true and yes=true.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        keepSnapshots: { type: "number" },
+        keepDays: { type: "number" },
+        keepPlans: { type: "number" },
+        expectedPlanId: { type: "string" },
+        apply: { type: "boolean" },
+        yes: { type: "boolean" },
+        vacuum: { type: "boolean" },
+        limit: { type: "number" },
         verbose: { type: "boolean" },
         format: { type: "string", enum: ["compact", "json"] }
       }
@@ -105,6 +162,19 @@ const tools = [
         format: { type: "string", enum: ["compact", "json"] }
       }
     }
+  },
+  {
+    name: "restore_smoke",
+    description: "Build and persist a dry-run restore plan for a snapshot and return bounded safety evidence.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Snapshot id or latest." },
+        limit: { type: "number", description: "Maximum blocked/planned operations to include." },
+        verbose: { type: "boolean" },
+        format: { type: "string", enum: ["compact", "json"] }
+      }
+    }
   }
 ];
 
@@ -151,6 +221,24 @@ async function callTool(name: string, args: Record<string, unknown>) {
   if (name === "get_snapshot") {
     return getSnapshotEnvelope({ id: parseSnapshotId(args.id) });
   }
+  if (name === "get_ops_state") {
+    return getOpsState({ includeIntegrity: args.includeIntegrity !== false });
+  }
+  if (name === "check_db_integrity") {
+    return checkDbIntegrity({ full: args.full === true });
+  }
+  if (name === "run_retention") {
+    return runRetention({
+      keepSnapshots: optionalMcpPositive(args.keepSnapshots, "keepSnapshots", 1_000_000),
+      keepDays: optionalMcpPositive(args.keepDays, "keepDays", 36_500),
+      keepPlans: optionalMcpPositive(args.keepPlans, "keepPlans", 1_000_000),
+      expectedPlanId: typeof args.expectedPlanId === "string" ? args.expectedPlanId : undefined,
+      apply: args.apply === true,
+      yes: args.yes === true,
+      vacuum: args.vacuum === true,
+      limit: parseLimit(args.limit, 20, 1_000)
+    });
+  }
   if (name === "get_resume_context") {
     return getResumeContext({
       id: parseSnapshotId(args.id ?? "latest", "snapshot id", { allowLatest: true }),
@@ -171,6 +259,12 @@ async function callTool(name: string, args: Record<string, unknown>) {
   if (name === "get_restore_plan") {
     return getRestorePlan({ id: parseSnapshotId(args.id, "restore plan id") });
   }
+  if (name === "restore_smoke") {
+    return restoreSmoke({
+      id: parseSnapshotId(args.id ?? "latest", "snapshot id", { allowLatest: true }),
+      limit: parseLimit(args.limit, 10, 200)
+    });
+  }
   throw new Error(`Unknown tool: ${name}`);
 }
 
@@ -184,10 +278,14 @@ function displayKindForTool(name: string): DisplayKind {
   if (name === "capture_snapshot") return "capture";
   if (name === "list_snapshots") return "snapshots-list";
   if (name === "get_snapshot") return "snapshot-show";
+  if (name === "get_ops_state") return "ops-state";
+  if (name === "check_db_integrity") return "db-integrity";
+  if (name === "run_retention") return "retention";
   if (name === "get_resume_context") return "resume";
   if (name === "plan_restore") return "restore-plan";
   if (name === "list_restore_plans") return "restore-plans-list";
   if (name === "get_restore_plan") return "restore-plan";
+  if (name === "restore_smoke") return "restore-smoke";
   return "doctor";
 }
 
@@ -205,6 +303,10 @@ function mcpLimit(args: Record<string, unknown>, compactDefault: number, jsonDef
 
 function isFullMcpOutput(args: Record<string, unknown>): boolean {
   return args.format === "json" || args.json === true || args.verbose === true;
+}
+
+function optionalMcpPositive(value: unknown, name: string, maxValue: number): number | undefined {
+  return value == null ? undefined : parsePositiveInteger(value, name, { maxValue });
 }
 
 async function main(): Promise<void> {

@@ -1,5 +1,23 @@
 #!/usr/bin/env bun
-import { captureSnapshot, countResources, countRestorePlans, countSnapshots, getRestorePlan, getResumeContext, getSnapshotEnvelope, listPolicies, listResources, listRestorePlans, listSnapshots, planSnapshotRestore, upsertPolicy } from "../runtime.js";
+import {
+  captureSnapshot,
+  checkDbIntegrity,
+  countResources,
+  countRestorePlans,
+  countSnapshots,
+  getOpsState,
+  getRestorePlan,
+  getResumeContext,
+  getSnapshotEnvelope,
+  listPolicies,
+  listResources,
+  listRestorePlans,
+  listSnapshots,
+  planSnapshotRestore,
+  restoreSmoke,
+  runRetention,
+  upsertPolicy
+} from "../runtime.js";
 import { normalizePolicyMode } from "../policy.js";
 import { applyServicePlan, planService } from "../service.js";
 import { defaultDbPath } from "../util.js";
@@ -56,6 +74,34 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
         print("resources-list", value, parsed, { limit });
         return;
       }
+      case "ops-state":
+      case "state": {
+        print("ops-state", getOpsState({ dbPath, includeIntegrity: !Boolean(parsed.flags["no-integrity"]) }), parsed);
+        return;
+      }
+      case "db": {
+        const subcommand = rest[0] ?? "integrity";
+        if (subcommand === "integrity" || subcommand === "check") {
+          print("db-integrity", checkDbIntegrity({ dbPath, full: Boolean(parsed.flags.full) }), parsed);
+          return;
+        }
+        throw new Error(`Unknown db command: ${subcommand}`);
+      }
+      case "retention": {
+        const subcommand = rest[0] === "plan" || rest[0] === "apply" ? rest[0] : "plan";
+        print("retention", runRetention({
+          dbPath,
+          keepSnapshots: optionalPositiveFlag(parsed, "keep-snapshots", 1_000_000),
+          keepDays: optionalPositiveFlag(parsed, "keep-days", 36_500),
+          keepPlans: optionalPositiveFlag(parsed, "keep-plans", 1_000_000),
+          expectedPlanId: stringFlag(parsed, "plan-id"),
+          apply: subcommand === "apply" || Boolean(parsed.flags.apply),
+          yes: Boolean(parsed.flags.yes),
+          vacuum: Boolean(parsed.flags.vacuum),
+          limit: displayLimit(parsed, 20, 1_000)
+        }), parsed);
+        return;
+      }
       case "resume": {
         print("resume", getResumeContext({
           dbPath,
@@ -96,6 +142,15 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
           apply: Boolean(parsed.flags.apply),
           yes: Boolean(parsed.flags.yes)
         }), parsed, { limit: displayLimit(parsed, 20, 1_000) });
+        return;
+      }
+      case "restore-smoke": {
+        if (parsed.flags.apply) throw new Error("restore-smoke is always dry-run and does not accept --apply.");
+        print("restore-smoke", restoreSmoke({
+          dbPath,
+          id: parseSnapshotId(rest[0] ?? "latest", "snapshot id", { allowLatest: true }),
+          limit: displayLimit(parsed, 10, 200)
+        }), parsed, { limit: displayLimit(parsed, 10, 200) });
         return;
       }
       case "policy":
@@ -152,7 +207,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
         print("doctor", withContract({
           ok: true,
           db_path: dbPath,
-          commands: ["capture", "list", "show", "resources", "resume", "plan", "plans", "restore", "policy", "daemon", "service"]
+          commands: ["capture", "list", "show", "resources", "ops-state", "db integrity", "retention", "resume", "plan", "plans", "restore", "restore-smoke", "policy", "daemon", "service"]
         }), parsed);
         return;
       }
@@ -226,11 +281,15 @@ function printHelp(parsed: ParsedArgs, unknown?: string): void {
       "snapshots list [--limit n] [--verbose] [--json]",
       "snapshots show <snapshot-id> [--limit n] [--verbose] [--json]",
       "snapshots resources [--limit n] [--verbose] [--json]",
+      "snapshots ops-state [--no-integrity] [--json]",
+      "snapshots db integrity [--full] [--json]",
+      "snapshots retention [plan|apply] [--keep-snapshots n] [--keep-days n] [--keep-plans n] [--limit n] [--plan-id id] [--yes] [--vacuum] [--json]",
       "snapshots resume [snapshot-id|latest] [--pane-tail-chars n] [--verbose] [--json]",
       "snapshots plan <snapshot-id> [--limit n] [--verbose] [--json]",
       "snapshots plans list [--limit n] [--json]",
       "snapshots plans show <plan-id> [--limit n] [--verbose] [--json]",
       "snapshots restore <snapshot-id> [--apply --yes] [--verbose] [--json]",
+      "snapshots restore-smoke [snapshot-id|latest] [--limit n] [--json]",
       "snapshots policy list [--limit n] [--json]",
       "snapshots policy set <selector> <observe|restore|ignore> [--reason text] [--json]",
       "snapshots daemon once|run [--interval seconds] [--max-runs n]",
@@ -253,6 +312,12 @@ function limitFlag(parsed: ParsedArgs, compactDefault: number, jsonDefault: numb
 
 function displayLimit(parsed: ParsedArgs, defaultValue: number, maxValue: number): number {
   return parseLimit(parsed.flags.limit, defaultValue, maxValue);
+}
+
+function optionalPositiveFlag(parsed: ParsedArgs, name: string, maxValue: number): number | undefined {
+  return parsed.flags[name] == null
+    ? undefined
+    : parsePositiveInteger(parsed.flags[name], name, { maxValue });
 }
 
 if (import.meta.main) {

@@ -33,6 +33,13 @@ The built-in restore allowlist is intentionally narrow:
 
 Execution requires both `--apply` and `--yes`. Restore never kills existing sessions or overwrites existing service files. Existing project directories and tmux sessions become `noop` operations. Restore operations include machine-readable `safety` metadata with effect type, prerequisites, blocked reason, and command hash.
 
+Ops and retention commands follow the same safety model. `snapshots retention`
+plans deletions by default and only mutates storage through `retention apply
+--plan-id <reviewed-id> --yes` or `retention --apply --plan-id <reviewed-id>
+--yes`. The command deletes old snapshot rows, their restore plans, and
+unreferenced resource rows idempotently; it never reads or prints raw resource
+payloads in compact output.
+
 ## Install
 
 ```sh
@@ -55,11 +62,16 @@ snapshots capture --name with-safe-pane-tail --include-pane-tail --pane-tail-cha
 snapshots list --limit 20
 snapshots show <snapshot-id> --limit 20
 snapshots resources --limit 50 --verbose
+snapshots ops-state
+snapshots db integrity
+snapshots retention plan --keep-snapshots 100 --keep-plans 100
+snapshots retention apply --keep-snapshots 100 --keep-plans 100 --plan-id <retention-plan-id> --yes
 snapshots resume [snapshot-id|latest]
 snapshots plan <snapshot-id>
 snapshots plans list
 snapshots plans show <plan-id>
 snapshots restore <snapshot-id> --apply --yes
+snapshots restore-smoke [snapshot-id|latest]
 snapshots policy list
 snapshots policy set kind:process ignore --reason "processes are observe-only"
 snapshots daemon once
@@ -80,6 +92,24 @@ Use these flags for gradual disclosure:
 - `--limit n` adjusts compact row counts on list/detail commands.
 - `show`, `plans show`, `resume`, and `--json` are the intended detail paths.
 
+Ops commands are optimized for loop evidence and default to compact,
+deterministic JSON:
+
+- `ops-state` reports bounded DB/file pressure, counts, latest snapshot/plan
+  references, resource kind counts, and a quick integrity result.
+- `db integrity` runs SQLite `quick_check` plus a bounded foreign-key check;
+  add `--full` for `integrity_check`.
+- `retention plan` returns the exact deletion counts and capped ID samples
+  without mutating storage. `retention apply --plan-id <id> --yes` recomputes
+  the plan and applies only if the current plan id still matches the reviewed
+  dry-run. Add `--vacuum` only when you want SQLite to reclaim free pages.
+- `restore-smoke` builds and stores a dry-run restore plan for a snapshot and
+  returns bounded planned/blocked evidence plus the restore plan reference.
+
+Raw artifacts are reported by redacted path/reference, for example
+`~/.hasna/snapshots/snapshots.sqlite`, without dumping snapshot resources,
+commands, pane tails, or other large/private payloads.
+
 ## MCP
 
 `snapshots-mcp` provides a minimal stdio JSON-RPC bridge with these tools:
@@ -87,15 +117,21 @@ Use these flags for gradual disclosure:
 - `capture_snapshot`
 - `list_snapshots`
 - `get_snapshot`
+- `get_ops_state`
+- `check_db_integrity`
+- `run_retention`
 - `get_resume_context`
 - `plan_restore`
 - `list_restore_plans`
 - `get_restore_plan`
+- `restore_smoke`
 
 MCP tool calls return compact JSON summaries by default. Pass
 `{"format":"json"}` or `{"verbose":true}` to request the full payload for tools
 such as `get_snapshot`, `plan_restore`, and `get_restore_plan`. Compact list and
-detail tool calls accept `limit` where applicable.
+detail tool calls accept `limit` where applicable. `run_retention` is dry-run
+unless `apply`, `yes`, and `expectedPlanId` all match the current retention
+plan.
 
 The MCP server uses `HASNA_SNAPSHOTS_DB_PATH` from the server process for
 database selection. Per-call `dbPath` arguments are rejected intentionally.

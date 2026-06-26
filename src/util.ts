@@ -143,6 +143,12 @@ export function redactJson(value: JsonValue): JsonValue {
   return value;
 }
 
+export function redactPath(path: string): string {
+  const home = homedir();
+  const compact = path.startsWith(home) ? `~${path.slice(home.length)}` : path;
+  return redactText(compact);
+}
+
 export function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
