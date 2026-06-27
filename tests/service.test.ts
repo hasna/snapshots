@@ -23,4 +23,10 @@ describe("service planning", () => {
     expect(plan.content).toContain("Restart=on-failure");
     expect(plan.content).toContain("ExecStart=snapshots-agent run --interval 60");
   });
+
+  test("default service command skips tmux pane tails for unattended daemon captures", () => {
+    const plan = planService({ platform: "linux" });
+
+    expect(plan.content).toContain("--tmux-tail-lines 0");
+  });
 });

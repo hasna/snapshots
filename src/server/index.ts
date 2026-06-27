@@ -37,7 +37,15 @@ Bun.serve({
         return json(getSnapshotEnvelope({ id: parts[1] }));
       }
       if (request.method === "POST" && parts[0] === "restore" && parts[1] === "plan" && parts[2]) {
-        return json(planSnapshotRestore({ id: parts[2] }));
+        const body = await readBody(request);
+        return json(planSnapshotRestore({
+          id: parts[2],
+          include: Array.isArray(body.include) ? body.include.map(String) : undefined,
+          exclude: Array.isArray(body.exclude) ? body.exclude.map(String) : undefined,
+          dependencyMode: body.dependencyMode === "parents" || body.dependencyMode === "full" ? body.dependencyMode : "none",
+          targetMode: body.targetMode === "merge-existing" ? "merge-existing" : "strict",
+          tmuxMode: body.tmuxMode === "resume-marked" ? "resume-marked" : "layout-only"
+        }));
       }
       return json({ ok: false, error: "not found" }, 404);
     } catch (error) {

@@ -1,4 +1,5 @@
 import { existsSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import type { JsonObject } from "./types.js";
@@ -20,7 +21,7 @@ export interface ServicePlan {
 
 export function planService(options: ServicePlanOptions = {}): ServicePlan {
   const targetPlatform = options.platform ?? platform();
-  const command = options.command ?? "snapshots-agent run --interval 300";
+  const command = options.command ?? defaultAgentCommand();
   if (targetPlatform === "darwin") {
     const path = join(homedir(), "Library", "LaunchAgents", "com.hasna.snapshots.plist");
     return {
@@ -54,10 +55,36 @@ export function applyServicePlan(plan: ServicePlan, yes: boolean): JsonObject {
     return { applied: false, reason: `Service file already exists: ${plan.path}`, plan: plan as unknown as JsonObject };
   }
   writeFileSync(plan.path, plan.content, "utf8");
+  const startResult = startService(plan);
   return {
     applied: true,
     path: plan.path,
-    next_command: plan.applyCommand
+    started: startResult.status === 0,
+    start_status: startResult.status,
+    start_error: startResult.stderr || startResult.error || null,
+    next_command: startResult.status === 0 ? null : plan.applyCommand
+  };
+}
+
+export function serviceStatus(plan: ServicePlan): JsonObject {
+  if (plan.kind === "systemd") {
+    const result = runServiceCommand(["systemctl", "--user", "is-active", "hasna-snapshots.service"]);
+    return {
+      kind: plan.kind,
+      path: plan.path,
+      installed: existsSync(plan.path),
+      active: result.stdout.trim() === "active",
+      status: result.stdout.trim() || result.stderr.trim() || result.error || "unknown"
+    };
+  }
+  const uid = typeof process.getuid === "function" ? process.getuid() : 0;
+  const result = runServiceCommand(["launchctl", "print", `gui/${uid}/com.hasna.snapshots`]);
+  return {
+    kind: plan.kind,
+    path: plan.path,
+    installed: existsSync(plan.path),
+    active: result.status === 0,
+    status: result.status === 0 ? "active" : result.stderr.trim() || result.error || "unknown"
   };
 }
 
@@ -74,6 +101,39 @@ RestartSec=10
 [Install]
 WantedBy=default.target
 `;
+}
+
+function defaultAgentCommand(): string {
+  const resolved = spawnSync("sh", ["-lc", "command -v snapshots-agent"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 2_000
+  });
+  const command = resolved.status === 0 ? resolved.stdout.trim() : "snapshots-agent";
+  return `${command || "snapshots-agent"} run --interval 300 --tmux-tail-lines 0`;
+}
+
+function runServiceCommand(command: string[]): { status: number | null; stdout: string; stderr: string; error?: string } {
+  const [program, ...args] = command;
+  const result = spawnSync(program, args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 10_000
+  });
+  return {
+    status: result.status,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+    error: result.error?.message
+  };
+}
+
+function startService(plan: ServicePlan): { status: number | null; stdout: string; stderr: string; error?: string } {
+  if (plan.kind === "systemd") {
+    const reload = runServiceCommand(["systemctl", "--user", "daemon-reload"]);
+    if (reload.status !== 0) return reload;
+  }
+  return runServiceCommand(plan.applyCommand);
 }
 
 function launchdPlist(command: string, intervalSeconds: number): string {

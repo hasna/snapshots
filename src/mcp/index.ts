@@ -40,6 +40,11 @@ const tools = [
       required: ["id"],
       properties: {
         id: { type: "string" },
+        include: { type: "array", items: { type: "string" } },
+        exclude: { type: "array", items: { type: "string" } },
+        dependencyMode: { type: "string", enum: ["none", "parents", "full"] },
+        targetMode: { type: "string", enum: ["strict", "merge-existing"] },
+        tmuxMode: { type: "string", enum: ["layout-only", "resume-marked"] },
         dbPath: { type: "string" }
       }
     }
@@ -63,7 +68,7 @@ async function handle(request: JsonRpcRequest) {
     return {
       protocolVersion: "2024-11-05",
       capabilities: { tools: {} },
-      serverInfo: { name: "@hasna/snapshots", version: "0.1.0" }
+      serverInfo: { name: "@hasna/snapshots", version: "0.1.2" }
     };
   }
   if (request.method === "tools/list") {
@@ -96,7 +101,15 @@ async function callTool(name: string, args: Record<string, unknown>) {
     return getSnapshotEnvelope({ dbPath, id: String(args.id) });
   }
   if (name === "plan_restore") {
-    return planSnapshotRestore({ dbPath, id: String(args.id) });
+    return planSnapshotRestore({
+      dbPath,
+      id: String(args.id),
+      include: Array.isArray(args.include) ? args.include.map(String) : undefined,
+      exclude: Array.isArray(args.exclude) ? args.exclude.map(String) : undefined,
+      dependencyMode: args.dependencyMode === "parents" || args.dependencyMode === "full" ? args.dependencyMode : "none",
+      targetMode: args.targetMode === "merge-existing" ? "merge-existing" : "strict",
+      tmuxMode: args.tmuxMode === "resume-marked" ? "resume-marked" : "layout-only"
+    });
   }
   throw new Error(`Unknown tool: ${name}`);
 }

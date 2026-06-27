@@ -22,10 +22,12 @@ Restore is dry-run by default.
 The built-in restore allowlist is intentionally narrow:
 
 - `project` resources can plan creation of missing project directories.
-- `tmux-session` resources can plan detached tmux session creation.
+- `tmux-session`, `tmux-window`, and `tmux-pane` resources can plan detached tmux layout recreation.
 - other resource kinds are observed and skipped unless future adapters explicitly support them.
 
-Execution requires both `--apply` and `--yes`. Restore never kills existing sessions or overwrites existing service files. Existing project directories and tmux sessions become `noop` operations.
+Execution requires both `--apply` and `--yes`. Restore never kills existing sessions or overwrites existing service files. Existing project directories and tmux sessions become `noop` operations, and child tmux resources are blocked by default when the target session already exists. Use `--merge-existing` only when you explicitly want to mutate a live tmux session.
+
+tmux restore is best effort. The default mode is `layout-only`: it recreates sessions, windows, panes, working directories, layouts, and active selection where safe, but it does not replay captured commands. Use `--tmux-mode resume-marked` to replay only commands that were explicitly marked restartable.
 
 ## Install
 
@@ -48,17 +50,24 @@ snapshots capture --name before-upgrade
 snapshots list
 snapshots show <snapshot-id>
 snapshots resources --limit 50
-snapshots plan <snapshot-id>
-snapshots restore <snapshot-id> --apply --yes
+snapshots resources <snapshot-id> --tree
+snapshots plan <snapshot-id> --resource kind:tmux-session --with-dependencies
+snapshots restore <snapshot-id> --resource tmux-session:work --with-dependencies --apply --yes
+snapshots restore --plan <plan-id> --plan-hash <hash> --apply --yes
 snapshots policy list
 snapshots policy set kind:process ignore --reason "processes are observe-only"
-snapshots daemon once
-snapshots daemon run --interval 300
+snapshots daemon once --tmux-tail-lines 0
+snapshots daemon run --interval 300 --tmux-tail-lines 20
 snapshots service plan
 snapshots service install --apply --yes
+snapshots service status
 ```
 
 All commands emit JSON so agents can consume stable contracts.
+
+Snapshot summaries include per-source status, duration, resource count, diagnostic count, and a `degraded` flag when a source returns warnings or errors. Daemon captures can use `--tmux-tail-lines 0` to skip pane scrollback tails for faster topology snapshots.
+
+Restore plans include an `autopilot` assessment. By default, only low-risk project directory creation can be marked safe for autopilot. tmux mutations require approval, and shell command replay is forbidden for autopilot.
 
 ## MCP
 

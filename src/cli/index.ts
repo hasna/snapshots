@@ -1,7 +1,17 @@
 #!/usr/bin/env bun
-import { captureSnapshot, getSnapshotEnvelope, listPolicies, listResources, listSnapshots, planSnapshotRestore, upsertPolicy } from "../runtime.js";
+import {
+  applySavedRestorePlan,
+  captureSnapshot,
+  getSnapshotEnvelope,
+  listPolicies,
+  listResources,
+  listSnapshotResources,
+  listSnapshots,
+  planSnapshotRestore,
+  upsertPolicy
+} from "../runtime.js";
 import { normalizePolicyMode } from "../policy.js";
-import { applyServicePlan, planService } from "../service.js";
+import { applyServicePlan, planService, serviceStatus } from "../service.js";
 import { defaultDbPath } from "../util.js";
 
 interface ParsedArgs {
@@ -21,7 +31,8 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
         const result = await captureSnapshot({
           dbPath,
           name: stringFlag(parsed, "name"),
-          include
+          include,
+          tmuxPaneTailLines: numberFlag(parsed, "tmux-tail-lines")
         });
         print(result);
         return;
@@ -37,19 +48,35 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
         return;
       }
       case "resources": {
+        if (rest[0]) {
+          print(listSnapshotResources({ dbPath, id: rest[0], tree: Boolean(parsed.flags.tree) }));
+          return;
+        }
         print(listResources({ dbPath, limit: numberFlag(parsed, "limit") ?? 200 }));
         return;
       }
       case "plan": {
         const id = required(rest[0], "snapshot id");
-        print(planSnapshotRestore({ dbPath, id }));
+        print(planSnapshotRestore({ dbPath, id, ...restoreRequestFromFlags(parsed) }));
         return;
       }
       case "restore": {
+        const planId = stringFlag(parsed, "plan");
+        if (planId) {
+          print(applySavedRestorePlan({
+            dbPath,
+            planId,
+            planHash: stringFlag(parsed, "plan-hash"),
+            apply: Boolean(parsed.flags.apply),
+            yes: Boolean(parsed.flags.yes)
+          }));
+          return;
+        }
         const id = required(rest[0], "snapshot id");
         print(planSnapshotRestore({
           dbPath,
           id,
+          ...restoreRequestFromFlags(parsed),
           apply: Boolean(parsed.flags.apply),
           yes: Boolean(parsed.flags.yes)
         }));
@@ -73,11 +100,15 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       case "daemon": {
         const subcommand = rest[0] ?? "once";
         if (subcommand === "once") {
-          print(await captureSnapshot({ dbPath, name: stringFlag(parsed, "name") ?? "daemon-once" }));
+          print(await captureSnapshot({
+            dbPath,
+            name: stringFlag(parsed, "name") ?? "daemon-once",
+            tmuxPaneTailLines: numberFlag(parsed, "tmux-tail-lines")
+          }));
           return;
         }
         if (subcommand === "run") {
-          await runDaemon(dbPath, numberFlag(parsed, "interval") ?? 300, numberFlag(parsed, "max-runs"));
+          await runDaemon(dbPath, numberFlag(parsed, "interval") ?? 300, numberFlag(parsed, "max-runs"), numberFlag(parsed, "tmux-tail-lines"));
           return;
         }
         throw new Error(`Unknown daemon command: ${subcommand}`);
@@ -94,6 +125,10 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
         }
         if (subcommand === "install") {
           print(applyServicePlan(servicePlan, Boolean(parsed.flags.apply) && Boolean(parsed.flags.yes)));
+          return;
+        }
+        if (subcommand === "status") {
+          print(serviceStatus(servicePlan));
           return;
         }
         throw new Error(`Unknown service command: ${subcommand}`);
@@ -120,10 +155,10 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   }
 }
 
-async function runDaemon(dbPath: string, intervalSeconds: number, maxRuns?: number): Promise<void> {
+async function runDaemon(dbPath: string, intervalSeconds: number, maxRuns?: number, tmuxPaneTailLines?: number): Promise<void> {
   let runs = 0;
   while (!maxRuns || runs < maxRuns) {
-    const result = await captureSnapshot({ dbPath, name: `daemon-${new Date().toISOString()}` });
+    const result = await captureSnapshot({ dbPath, name: `daemon-${new Date().toISOString()}`, tmuxPaneTailLines });
     print({ event: "snapshot", ...result });
     runs += 1;
     if (maxRuns && runs >= maxRuns) break;
@@ -166,6 +201,22 @@ function numberFlag(parsed: ParsedArgs, name: string): number | undefined {
   return parsedValue;
 }
 
+function listFlag(parsed: ParsedArgs, name: string): string[] | undefined {
+  const value = stringFlag(parsed, name);
+  if (!value) return undefined;
+  return value.split(",").map((part) => part.trim()).filter(Boolean);
+}
+
+function restoreRequestFromFlags(parsed: ParsedArgs) {
+  return {
+    include: listFlag(parsed, "resource") ?? listFlag(parsed, "include"),
+    exclude: listFlag(parsed, "exclude"),
+    dependencyMode: Boolean(parsed.flags["with-dependencies"]) ? "full" as const : "none" as const,
+    targetMode: Boolean(parsed.flags["merge-existing"]) ? "merge-existing" as const : "strict" as const,
+    tmuxMode: stringFlag(parsed, "tmux-mode") === "resume-marked" ? "resume-marked" as const : "layout-only" as const
+  };
+}
+
 function required(value: string | undefined, label: string): string {
   if (!value) throw new Error(`Missing ${label}.`);
   return value;
@@ -180,16 +231,18 @@ function printHelp(unknown?: string): void {
     ok: !unknown,
     error: unknown ? `Unknown command: ${unknown}` : undefined,
     usage: [
-      "snapshots capture [--name name] [--include machine,tmux,projects,processes,sessions,browser,desktop,apps]",
+      "snapshots capture [--name name] [--include machine,tmux,projects,processes,sessions,browser,desktop,apps] [--tmux-tail-lines n]",
       "snapshots list [--limit n]",
       "snapshots show <snapshot-id>",
       "snapshots resources [--limit n]",
-      "snapshots plan <snapshot-id>",
-      "snapshots restore <snapshot-id> [--apply --yes]",
+      "snapshots resources <snapshot-id> [--tree]",
+      "snapshots plan <snapshot-id> [--resource selector[,selector]] [--exclude selector[,selector]] [--with-dependencies] [--merge-existing]",
+      "snapshots restore <snapshot-id> [--apply --yes] [--resource selector[,selector]] [--exclude selector[,selector]] [--with-dependencies] [--merge-existing]",
+      "snapshots restore --plan <plan-id> --plan-hash hash [--apply --yes]",
       "snapshots policy list",
       "snapshots policy set <selector> <observe|restore|ignore> [--reason text]",
-      "snapshots daemon once|run [--interval seconds] [--max-runs n]",
-      "snapshots service plan|install [--apply --yes]",
+      "snapshots daemon once|run [--interval seconds] [--max-runs n] [--tmux-tail-lines n]",
+      "snapshots service plan|install|status [--apply --yes]",
       "snapshots doctor"
     ]
   });

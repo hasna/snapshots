@@ -1,27 +1,32 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { hostname, platform, release, userInfo } from "node:os";
-import type { CaptureDiagnostic, CaptureOptions, CaptureResult, JsonObject, JsonValue, SnapshotResource } from "../types.js";
+import type { CaptureDiagnostic, CaptureOptions, CaptureResult, CaptureSourceStatus, JsonObject, JsonValue, SnapshotResource } from "../types.js";
 import { commandExists, defaultDataDir, nowIso, redactJson, redactText, runCommand, runJsonCommand, runTmux, sha256, slugPart } from "../util.js";
 
 export async function captureAll(options: CaptureOptions = {}): Promise<CaptureResult> {
   const include = new Set(options.include ?? ["machine", "tmux", "projects", "processes", "sessions", "browser", "desktop", "apps"]);
   const now = options.now ?? nowIso();
-  const result: CaptureResult = { resources: [], diagnostics: [] };
+  const result: CaptureResult = { resources: [], diagnostics: [], sourceStatuses: [] };
 
-  const append = (capture: CaptureResult) => {
+  const append = (source: string, capture: CaptureResult, durationMs: number) => {
     result.resources.push(...capture.resources);
     result.diagnostics.push(...capture.diagnostics);
+    result.sourceStatuses?.push(sourceStatus(source, capture, durationMs));
+  };
+  const captureSource = (source: string, fn: () => CaptureResult) => {
+    const started = performance.now();
+    append(source, fn(), Math.round(performance.now() - started));
   };
 
-  if (include.has("machine")) append(captureMachine(now, options.cwd));
-  if (include.has("tmux")) append(captureTmux(now));
-  if (include.has("projects")) append(captureProjects(now));
-  if (include.has("processes")) append(captureProcesses(now));
-  if (include.has("sessions")) append(captureSessions(now));
-  if (include.has("browser")) append(captureBrowser(now));
-  if (include.has("desktop")) append(captureDesktop(now));
-  if (include.has("apps")) append(captureApps(now));
+  if (include.has("machine")) captureSource("machine", () => captureMachine(now, options.cwd));
+  if (include.has("tmux")) captureSource("tmux", () => captureTmux(now, options));
+  if (include.has("projects")) captureSource("projects", () => captureProjects(now));
+  if (include.has("processes")) captureSource("processes", () => captureProcesses(now));
+  if (include.has("sessions")) captureSource("sessions", () => captureSessions(now));
+  if (include.has("browser")) captureSource("browser", () => captureBrowser(now));
+  if (include.has("desktop")) captureSource("desktop", () => captureDesktop(now));
+  if (include.has("apps")) captureSource("apps", () => captureApps(now));
 
   for (const diagnostic of result.diagnostics) {
     result.resources.push(diagnosticResource(diagnostic, now));
@@ -53,7 +58,7 @@ function captureMachine(now: string, cwd = process.cwd()): CaptureResult {
   };
 }
 
-function captureTmux(now: string): CaptureResult {
+function captureTmux(now: string, options: CaptureOptions = {}): CaptureResult {
   if (!commandExists("tmux")) {
     return diagnostic("tmux", "info", "tmux command not found; tmux resources were not captured.");
   }
@@ -150,7 +155,8 @@ function captureTmux(now: string): CaptureResult {
           observedAt: now
         });
       }
-      const paneTail = runTmux(["capture-pane", "-p", "-t", paneId, "-S", "-100"], 2_000);
+      const paneTailLines = tmuxPaneTailLines(options);
+      const paneTail = paneTailLines > 0 ? runTmux(["capture-pane", "-p", "-t", paneId, "-S", `-${paneTailLines}`], 2_000) : undefined;
       resources.push({
         id: `tmux-pane:${slugPart(sessionName)}:${paneId.replace("%", "")}`,
         kind: "tmux-pane",
@@ -164,7 +170,9 @@ function captureTmux(now: string): CaptureResult {
           current_path: panePath,
           current_command: paneCommand,
           start_command: redactText(paneStartCommand),
-          content_tail: paneTail.ok ? redactText(paneTail.stdout).slice(-16_000) : "",
+          restartable: isRestartableCommand(startCommand),
+          content_tail: paneTail?.ok ? redactText(paneTail.stdout).slice(-16_000) : "",
+          content_tail_skipped: paneTailLines === 0,
           active: paneActive === "1"
         },
         observedAt: now
@@ -402,6 +410,16 @@ function diagnostic(source: string, level: CaptureDiagnostic["level"], message: 
   return { resources: [], diagnostics: [{ source, level, message, detail }] };
 }
 
+function sourceStatus(source: string, capture: CaptureResult, durationMs: number): CaptureSourceStatus {
+  return {
+    source,
+    ok: !capture.diagnostics.some((diagnostic) => diagnostic.level === "error" || diagnostic.level === "warning"),
+    durationMs,
+    resourceCount: capture.resources.length,
+    diagnosticCount: capture.diagnostics.length
+  };
+}
+
 function diagnosticResource(diagnostic: CaptureDiagnostic, now: string): SnapshotResource {
   return {
     id: `diagnostic:${slugPart(`${diagnostic.source}:${diagnostic.message}`)}`,
@@ -436,6 +454,15 @@ function safeStat(path: string) {
 function isRestartableCommand(command: string): boolean {
   if (command.includes("HASNA_SNAPSHOTS_RESTARTABLE=1")) return true;
   return /\b(codex|claude|codewith|coders)\b/.test(command) && /\b(--resume|resume)\b/.test(command);
+}
+
+function tmuxPaneTailLines(options: CaptureOptions): number {
+  if (typeof options.tmuxPaneTailLines === "number" && Number.isFinite(options.tmuxPaneTailLines)) {
+    return Math.max(0, Math.floor(options.tmuxPaneTailLines));
+  }
+  const envValue = Number(process.env.HASNA_SNAPSHOTS_TMUX_TAIL_LINES);
+  if (Number.isFinite(envValue)) return Math.max(0, Math.floor(envValue));
+  return 100;
 }
 
 function parseRestartableCommand(args: string): { id: string; command?: string } | undefined {
