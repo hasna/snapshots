@@ -43,6 +43,89 @@ HASNA_SNAPSHOTS_DIR=/path/to/data
 HASNA_SNAPSHOTS_DB_PATH=/path/to/snapshots.sqlite
 ```
 
+## SDK
+
+The package exposes typed SDK exports from the root package and focused subpaths:
+
+```ts
+import { SnapshotStore, captureAll, createRestorePlan } from "@hasna/snapshots";
+import { planService } from "@hasna/snapshots/service";
+```
+
+Capture and store a snapshot:
+
+```ts
+import { SnapshotStore, captureAll } from "@hasna/snapshots";
+
+const store = new SnapshotStore({ path: "/tmp/snapshots.sqlite" });
+try {
+  const capture = await captureAll({
+    include: ["machine", "projects", "tmux"],
+    tmuxPaneTailLines: 0,
+  });
+
+  const snapshot = store.saveSnapshot(capture.resources, {
+    name: "before-upgrade",
+    diagnostics: capture.diagnostics,
+    sourceStatuses: capture.sourceStatuses,
+  });
+
+  console.log(snapshot.id, snapshot.resourceCount);
+} finally {
+  store.close();
+}
+```
+
+Build a guarded restore plan without applying it:
+
+```ts
+import { SnapshotStore, createRestorePlan } from "@hasna/snapshots";
+
+const store = new SnapshotStore();
+try {
+  const [snapshot] = store.listSnapshots(1);
+  if (!snapshot) throw new Error("No snapshots found");
+
+  const resources = store.getSnapshotResources(snapshot.id);
+  const policies = store.listPolicies();
+  const plan = createRestorePlan(snapshot, resources, policies, {
+    include: ["tmux-session:work"],
+    dependencyMode: "parents",
+    targetMode: "strict",
+  });
+
+  store.saveRestorePlan(plan);
+  console.log(plan.id, plan.summary, plan.autopilot);
+} finally {
+  store.close();
+}
+```
+
+Service planning is SDK-only until callers explicitly write/apply the generated plan:
+
+```ts
+import { planService } from "@hasna/snapshots/service";
+
+const plan = planService({ intervalSeconds: 300 });
+console.log(plan.kind, plan.path, plan.note);
+```
+
+### Interface Parity
+
+| Workflow | CLI | SDK | MCP | HTTP server |
+| --- | --- | --- | --- | --- |
+| Capture snapshot | `snapshots capture`, `snapshots daemon once` | `captureAll`, `SnapshotStore.saveSnapshot` | `capture_snapshot` | `POST /snapshots` |
+| List snapshots | `snapshots list` | `SnapshotStore.listSnapshots` | `list_snapshots` | `GET /snapshots` |
+| Read snapshot/resources | `snapshots show`, `snapshots resources` | `SnapshotStore.getSnapshot`, `SnapshotStore.getSnapshotResources`, `SnapshotStore.listResources` | `get_snapshot` | `GET /snapshots/:id` |
+| Plan restore | `snapshots plan`, `snapshots restore` without `--apply` | `createRestorePlan`, `SnapshotStore.saveRestorePlan` | `plan_restore` | not exposed |
+| Apply restore | `snapshots restore --apply --yes` | `createRestorePlan(..., { apply: true, yes: true })` | intentionally not exposed | not exposed |
+| Policy management | `snapshots policy list/set` | `SnapshotStore.listPolicies`, `SnapshotStore.upsertPolicy` | intentionally not exposed | not exposed |
+| Service planning | `snapshots service plan/status/install` | `planService`, `serviceStatus`, `applyServicePlan` | intentionally not exposed | not exposed |
+
+MCP intentionally exposes only capture, list, read, and plan tools. Restore
+execution and service installation mutate local machine state, so they stay in
+the CLI/SDK surfaces where callers must opt in explicitly.
+
 ## CLI
 
 ```sh
